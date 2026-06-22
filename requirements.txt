@@ -1,0 +1,9 @@
+dipy
+h5py
+nibabel
+numpy
+pandas
+scipy
+
+# Install OSS-DBS and NEURON separately using versions compatible with the
+# target simulation environment.

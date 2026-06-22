@@ -1,0 +1,33 @@
+patient_id: patient_example
+base_dir: /mnt/d/dbs_workspace/dbs-stn-hdp-pipeline/patients/patient_example
+
+dwi:
+  nifti: raw/dwi/dwi.nii.gz
+  bvec: raw/dwi/dwi.bvec
+  bval: raw/dwi/dwi.bval
+  pe_dir: AP
+  rpe_mode: none
+  reverse_phase_b0: null
+
+anat:
+  t1: raw/anat/t1.nii.gz
+  t2_or_swi: raw/anat/t2_or_swi.nii.gz
+
+ct:
+  postop_ct: raw/ct/postop_ct.nii.gz
+
+tractography:
+  algorithm: iFOD2
+  wholebrain_count: 1000000
+  cutoff: 0.06
+  minlength: 10
+  maxlength: 200
+
+lead_dbs:
+  atlas_space: MNI152NLin2009bAsym
+  preferred_atlases:
+    - DISTAL (Ewert 2017)
+    - DBS Tractography Atlas (Middlebrooks 2020)
+    - Hyperdirect Pathway Atlas (Treu 2020)
+    - Brainstem Connectome (Meola 2016)
+    - STN Sweetspots (Dembek 2019)

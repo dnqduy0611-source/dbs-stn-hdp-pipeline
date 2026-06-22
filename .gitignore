@@ -1,0 +1,79 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.*
+secrets.*
+
+# Python and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Patient and clinical data
+patients/*
+!patients/.gitkeep
+lead_dbs_work/
+raw/
+derivatives/
+qc/
+logs/
+
+# Medical imaging, tractography, simulation and scientific outputs
+*.dcm
+*.ima
+*.nii
+*.nii.gz
+*.mif
+*.mif.gz
+*.tck
+*.trk
+*.vtk
+*.vtp
+*.stl
+*.nrrd
+*.nhdr
+*.h5
+*.hdf5
+*.mat
+*.msh
+*.geo
+*.fcsv
+*.seg.nrrd
+*.zip
+*.7z
+*.tar
+*.tar.gz
+
+# Generated tables, reports and logs may contain identifiers or coordinates
+*.csv
+*.tsv
+*.json
+*.jsonl
+*.log
+*.html
+*.png
+*.jpg
+*.jpeg
+*.pdf
+
+# Tool installations and build artifacts
+tools/
+node_modules/
+dist/
+build/
+*.egg-info/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
