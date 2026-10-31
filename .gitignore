@@ -77,3 +77,8 @@ build/
 Thumbs.db
 .vscode/
 .idea/
+
+# Bang anh xa danh tinh - TUYET DOI khong commit, khong dong bo cloud
+PATIENT_ID_MAP.csv
+*_ID_MAP.csv
+patient-id-map/

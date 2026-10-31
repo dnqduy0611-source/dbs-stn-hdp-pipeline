@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: $0 <patient_dir>"
-  echo "Example: $0 /mnt/d/dbs_workspace/dbs_stn_hdp_pipeline/patients/patient_example"
+  echo "Example: $0 /mnt/d/ossdbs_env/dbs_stn_hdp_pipeline/patients/sub-09"
   exit 2
 fi
 
@@ -101,7 +101,11 @@ out = {
     "n_bvals": None,
     "n_bvecs": None,
     "shells": [],
-    "nonzero_directions": None,
+    "nonzero_volume_count": None,
+    "unique_signed_vector_count": None,
+    "unique_axis_count": None,
+    "direction_repetition_counts": [],
+    "repeated_block_pattern": None,
     "b0_count": None,
     "bvec_rows": None,
     "warnings": [],
@@ -114,7 +118,7 @@ if bval_path.is_file():
     shells = sorted(set(rounded))
     out["shells"] = shells
     out["b0_count"] = sum(1 for v in vals if v < 50)
-    out["nonzero_directions"] = sum(1 for v in vals if v >= 50)
+    out["nonzero_volume_count"] = sum(1 for v in vals if v >= 50)
 else:
     vals = []
     out["warnings"].append("Missing bval file.")
@@ -131,14 +135,68 @@ if bvec_path.is_file():
             out["warnings"].append(f"bvec rows have inconsistent lengths: {lengths}.")
         if vals and len(rows) == 3 and lengths[0] != len(vals):
             out["warnings"].append(f"bval count ({len(vals)}) != bvec count ({lengths[0]}).")
+
+        if vals and len(rows) == 3 and len(set(lengths)) == 1 and lengths[0] == len(vals):
+            vectors = []
+            for index, bvalue in enumerate(vals):
+                if bvalue < 50:
+                    continue
+                vector = [rows[axis][index] for axis in range(3)]
+                norm = math.sqrt(sum(component * component for component in vector))
+                if norm < 1e-8:
+                    out["warnings"].append(
+                        f"Non-b0 volume {index} has a zero-length gradient vector."
+                    )
+                    continue
+                vectors.append(tuple(component / norm for component in vector))
+
+            def cluster_directions(items, antipodal=False, tolerance=1e-5):
+                representatives = []
+                counts = []
+                assignments = []
+                for vector in items:
+                    match = None
+                    for candidate_index, candidate in enumerate(representatives):
+                        dot = sum(a * b for a, b in zip(vector, candidate))
+                        if antipodal:
+                            dot = abs(dot)
+                        if 1.0 - dot <= tolerance:
+                            match = candidate_index
+                            break
+                    if match is None:
+                        representatives.append(vector)
+                        counts.append(1)
+                        assignments.append(len(representatives) - 1)
+                    else:
+                        counts[match] += 1
+                        assignments.append(match)
+                return representatives, counts, assignments
+
+            signed_reps, signed_counts, signed_assignments = cluster_directions(vectors)
+            axis_reps, _, _ = cluster_directions(vectors, antipodal=True)
+            out["unique_signed_vector_count"] = len(signed_reps)
+            out["unique_axis_count"] = len(axis_reps)
+            out["direction_repetition_counts"] = sorted(signed_counts)
+
+            half = len(signed_assignments) // 2
+            if (
+                len(signed_assignments) % 2 == 0
+                and signed_assignments[:half] == signed_assignments[half:]
+            ):
+                out["repeated_block_pattern"] = (
+                    f"two identical ordered blocks of {half} non-b0 vectors"
+                )
 else:
     out["warnings"].append("Missing bvec file.")
 
-if vals and out["nonzero_directions"] is not None:
-    if out["nonzero_directions"] < 30:
+if vals and out["nonzero_volume_count"] is not None:
+    if out["unique_axis_count"] is not None and out["unique_axis_count"] < 30:
         out["warnings"].append("Fewer than 30 non-b0 diffusion directions; tractography will be weak.")
     if len([s for s in out["shells"] if s >= 50]) < 2:
-        out["warnings"].append("Single-shell DWI detected; MSMT-CSD is possible but less ideal than multi-shell.")
+        out["warnings"].append(
+            "Single-shell DWI detected: standard 3-tissue MSMT-CSD is not identifiable. "
+            "Use a 2-tissue model or MRtrix3Tissue SS3T-CSD."
+        )
 
 print(json.dumps(out, indent=2))
 PY

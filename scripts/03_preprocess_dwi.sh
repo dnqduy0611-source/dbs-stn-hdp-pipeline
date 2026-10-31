@@ -11,7 +11,7 @@ export PATH="/home/devold/fsl/share/fsl/bin:/home/devold/ants_env/bin:$PATH"
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: $0 <patient_dir>"
-  echo "Example: $0 /mnt/d/dbs_workspace/dbs_stn_hdp_pipeline/patients/patient_example"
+  echo "Example: $0 /mnt/d/ossdbs_env/dbs_stn_hdp_pipeline/patients/sub-09"
   exit 2
 fi
 
@@ -208,15 +208,47 @@ run dwi2tensor dwi_bias.mif dt.mif \
   -force
 
 run tensor2metric dt.mif \
+  -mask mask.mif \
   -fa fa.mif \
   -adc md.mif \
+  -ad ad.mif \
+  -rd rd.mif \
   -vector ev.mif \
   -force
+
+run tensor2metric dt.mif \
+  -mask mask.mif \
+  -value eigenvalues.mif \
+  -num 1,2,3 \
+  -force
+
+# A physically valid diffusion tensor is positive semidefinite. Keep the
+# original tensor and metrics unchanged, but flag every in-mask voxel where at
+# least one fitted eigenvalue is strictly negative for QC.
+run mrcalc eigenvalues.mif 0 -lt negative_eigenvalue_components.mif \
+  -datatype bit \
+  -force
+
+run mrmath negative_eigenvalue_components.mif max negative_eigenvalue_voxels.mif \
+  -axis 3 \
+  -datatype bit \
+  -force
+
+mask_voxel_count="$(mrstats mask.mif -ignorezero -output count | tr -d '[:space:]')"
+negative_eigenvalue_voxel_count="$(mrstats negative_eigenvalue_voxels.mif -ignorezero -output count | tr -d '[:space:]')"
+negative_eigenvalue_percent="$(awk \
+  -v negative="$negative_eigenvalue_voxel_count" \
+  -v total="$mask_voxel_count" \
+  'BEGIN { if (total > 0) printf "%.4f", 100.0 * negative / total; else print "nan" }')"
 
 run mrconvert b0_mean.mif b0_mean.nii.gz -force
 run mrconvert mask.mif mask.nii.gz -force
 run mrconvert fa.mif fa.nii.gz -force
 run mrconvert md.mif md.nii.gz -force
+run mrconvert ad.mif ad.nii.gz -force
+run mrconvert rd.mif rd.nii.gz -force
+run mrconvert eigenvalues.mif eigenvalues.nii.gz -force
+run mrconvert negative_eigenvalue_voxels.mif negative_eigenvalue_voxels.nii.gz -force
 run mrconvert ev.mif ev.nii.gz -force
 
 cat > "$report" <<EOF
@@ -249,13 +281,25 @@ Generated: $(date -Is)
 | Mean b0 | \`$out_dir/b0_mean.nii.gz\` |
 | FA | \`$out_dir/fa.nii.gz\` |
 | MD | \`$out_dir/md.nii.gz\` |
+| AD (lambda 1) | \`$out_dir/ad.nii.gz\` |
+| RD (mean of lambda 2 and lambda 3) | \`$out_dir/rd.nii.gz\` |
+| Eigenvalues (lambda 1, lambda 2, lambda 3) | \`$out_dir/eigenvalues.nii.gz\` |
+| Negative-eigenvalue voxel mask | \`$out_dir/negative_eigenvalue_voxels.nii.gz\` |
 | Principal eigenvector | \`$out_dir/ev.nii.gz\` |
+
+## Tensor Eigenvalue QC
+
+- Voxels in brain mask: \`$mask_voxel_count\`
+- Voxels with at least one eigenvalue below zero: \`$negative_eigenvalue_voxel_count\`
+- Fraction of brain-mask voxels with a negative eigenvalue: \`$negative_eigenvalue_percent%\`
+- This is a QC flag only. Negative eigenvalues are not clipped or otherwise modified.
 
 ## Manual QC Checklist
 
 - [ ] Inspect \`b0_mean.nii.gz\` for EPI distortion near STN/midbrain.
 - [ ] Inspect \`mask.nii.gz\` for under/over-masking.
 - [ ] Inspect \`fa.nii.gz\` for plausible corpus callosum/internal capsule contrast.
+- [ ] Inspect \`negative_eigenvalue_voxels.nii.gz\`; widespread or anatomically clustered flags require investigation.
 - [ ] Confirm no left/right orientation issue before registration.
 - [ ] Confirm phase-encoding correction result is acceptable for this case.
 

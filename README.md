@@ -1,66 +1,91 @@
-# DBS-STN HDP Pipeline
+# DBS-STN tractography & electrode–tract analysis pipeline
 
-De-identified backup of a DBS-STN diffusion MRI, tractography, Lead-DBS,
-OSS-DBS, VTA/PAM, and QC workflow.
+Research code from a clinical study of subthalamic nucleus deep brain stimulation
+(STN-DBS) for Parkinson's disease, using a Medtronic SenSight directional lead (B33005).
+The pipeline goes from pre-operative diffusion MRI and post-operative CT to
+patient-specific fibre tracts, electrode contact positions, stimulation-volume
+models, and statistics against clinical outcome (MDS-UPDRS III).
 
-## Repository scope
+> Code only. No patient images, tractograms, coordinates or clinical scores are
+> included. Subjects are referred to by pseudonymous codes (`sub-01` … `sub-10`).
+> This is research software, not a validated clinical tool.
 
-This repository stores algorithms, scripts, example configuration, and
-workflow documentation only. It intentionally excludes all patient data,
-clinical identifiers, generated images, tractograms, simulation outputs, and
-tool installations.
+## What it does
 
 ```text
-configs/   De-identified configuration templates
-docs/      Workflow and data-backup documentation
-patients/  Empty placeholder; real patient workspaces are ignored
-scripts/   MRtrix/FSL/ANTs, Lead-DBS, OSS-DBS, VTA/PAM, and QC utilities
+DWI (multi-/single-shell) + T1/T2/SWI          post-op CT
+        │                                          │
+  preprocessing (MRtrix3, FSL, ANTs, Synb0)   electrode localisation
+        │                                     (Lead-DBS / DiODe, CT axis QC)
+  FOD (MSMT-CSD / SS3T) → ACT → 10M streamlines + SIFT2
+        │                                          │
+  tract extraction: HDP · CST · medial lemniscus · DRTT
+        │                                          │
+        └──────── contact-to-tract distances ──────┘
+                           │
+         OSS-DBS volume of tissue activated / pathway activation (NEURON)
+                           │
+            statistics vs. clinical improvement (UPDRS III)
 ```
 
-## Quick start
+## Repository layout
 
-The shell pipeline is intended for WSL/Linux with MRtrix3, FSL, and ANTs.
-Python utilities additionally use packages listed in `requirements.txt`.
-Lead-DBS, OSS-DBS, MATLAB, Slicer, and NEURON are external dependencies for
-the relevant stages.
+| folder | contents |
+|---|---|
+| `scripts/` | numbered shell pipeline (`00`–`07`), single-shell variants, fine-grid 5TT, CT/DiODe electrode utilities, OSS-DBS VTA/PAM drivers |
+| `tools/cst_ml/` | config-driven toolkit that builds the corticospinal tract and medial lemniscus for any case from one `cases/<case>.conf` file, with QC gates |
+| `tractography/` | streamline filters: tilted midsagittal-plane fit, midline-crossing pruning, length/tortuosity pruning, physiological HDP constraints |
+| `analysis/` | electrode–tract distance measures, cluster bootstrap and block-permutation tests, measurement-robustness and specificity tests |
+| `deid/` | two-pass de-identification gate for imaging archives (binary-safe `.tck`/`.mif` header rewriting) |
+| `configs/`, `docs/` | example configuration and workflow notes |
+
+## Design choices
+
+- **Every measurement in native patient space.** MNI space is only used to carry
+  atlas ROIs into the patient's T1; distances are never measured in template space.
+- **QC gates return numbers.** Each stage has a gate (registration landmark error,
+  ROI volume/side checks, NaN checks before optimisation, an anatomical
+  anterior–posterior check of the CST against the red nucleus). Steps that need a
+  human decision are not auto-approved.
+- **Thresholds are measured per case.** Fixed absolute cut-offs (e.g. a depth limit
+  in mm) failed when moved between patients with different fields of view, so
+  filters anchor to each patient's own anatomy instead.
+- **Clustered statistics.** Two hemispheres per patient are not independent, so
+  inference uses patient-level cluster bootstrap and block permutation rather than
+  naive per-contact p-values.
+
+## Requirements
+
+WSL/Linux with MRtrix3 (3.0.x), FSL, ANTs; Python 3 with `nibabel`, `numpy`,
+`scipy`, `pandas` (see `requirements.txt`). Lead-DBS/DiODe (MATLAB), OSS-DBS,
+NEURON and 3D Slicer are needed for the corresponding stages.
 
 ```bash
-git clone <private-repository-url>
-cd dbs-stn-hdp-pipeline
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
 bash scripts/00_check_environment.sh
 bash scripts/01_prepare_patient.sh patient_example "$(pwd)"
-bash scripts/02_check_inputs.sh patients/patient_example
+
+# CST/ML toolkit for one case
+cp tools/cst_ml/cases/example.conf tools/cst_ml/cases/sub-01.conf   # then edit paths
+export DBS_ROOT=/path/to/project
+bash tools/cst_ml/fit_msp.sh sub-01
+bash tools/cst_ml/build_cst_ml_rois.sh sub-01
+python3 tools/cst_ml/qc_cst_ml_rois.py <roi_dir> sub-01
+bash tools/cst_ml/build_cst.sh sub-01
+bash tools/cst_ml/build_ml.sh sub-01
 ```
 
-Copy `configs/patient.example.yaml` into the generated patient workspace and
-adjust paths and acquisition metadata locally.
+Some scripts were written for one specific case and still contain example paths;
+pass paths as arguments or edit the constants before running. Many in-code
+comments are in Vietnamese (without diacritics); they record why each step and
+threshold was chosen.
 
 ## Data safety
 
-Never commit real patient directories or clinical data. This includes DICOM,
-NIfTI, tractography, electrode coordinates, screenshots, logs, metrics, and
-OSS-DBS/Lead-DBS outputs. See `docs/data_backup.md` for the recommended
-encrypted data-backup layout.
+Never commit patient directories, DICOM/NIfTI, tractograms, electrode
+coordinates, screenshots, logs or simulation outputs. The identity map
+(`PATIENT_ID_MAP.csv`) is listed in `.gitignore` and must stay offline.
+See `docs/data_backup.md`.
 
-Several specialized scripts retain de-identified example paths under
-`D:\dbs_workspace`. Override their command-line path arguments or adapt the
-constants to the local environment before execution.
+## License
 
-## Main workflow
-
-```text
-DWI + anatomical MRI + post-op imaging
--> MRtrix/FSL/ANTs preprocessing
--> FOD and ACT tractography
--> Lead-DBS electrode reconstruction
--> HDP/CST/DRTT extraction
--> OSS-DBS VTA/PAM simulation
--> Slicer and quantitative QC
-```
-
-This repository is a research workflow backup, not a validated clinical
-device. Outputs require expert review before interpretation.
+MIT, see `LICENSE`.

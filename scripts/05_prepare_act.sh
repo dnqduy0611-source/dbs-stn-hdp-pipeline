@@ -11,7 +11,7 @@ export PATH="/home/devold/fsl/share/fsl/bin:$PATH"
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: $0 <patient_dir>"
-  echo "Example: $0 /mnt/d/dbs_workspace/dbs_stn_hdp_pipeline/patients/patient_example"
+  echo "Example: $0 /mnt/d/ossdbs_env/dbs_stn_hdp_pipeline/patients/sub-04"
   exit 2
 fi
 
@@ -115,16 +115,19 @@ run mrcalc "$t1" t1_brainmask_from5tt.nii.gz -mult t1_brain_from5tt.nii.gz \
 run mrcalc "$b0" "$dwi_mask" -mult b0_brain.nii.gz \
   -force
 
-run flirt \
-  -in t1_brain_from5tt.nii.gz \
-  -ref b0_brain.nii.gz \
-  -dof 6 \
-  -cost normmi \
-  -searchrx -90 90 \
-  -searchry -90 90 \
-  -searchrz -90 90 \
-  -omat t12dwi_fsl.mat \
-  -out t1_brain_in_dwi.nii.gz
+# --------------------------------------------------------------------------
+# DANG KY T1 <-> DWI
+#
+# LICH SU: ban cu chay flirt T1->DWI TRUC TIEP voi -searchrx/ry/rz -90 90. Voi cap
+# anh khac tuong phan (T1 vs b0) khoang tim rong do lam flirt roi vao CUC TIEU MI
+# GIA. Do that tren 3 ca: lech 5.81 mm (sub-01), 9.04 mm (sub-06), 3.29 mm (sub-03) tai STN,
+# kem xoay 2.3-2.9 do — keo lech CA ROI atlas LAN 5tt_dwi.mif.
+#
+# BAN HIEN TAI: chi do MOT chieu (DWI->T1, khong search) roi lay nghich dao. Huong
+# nay thang trong 2 phep do doc lap tren sub-01: NMI T1-in-DWI 1.0126 -> 1.0270, va
+# z-score SWI tren nhan giau sat -0.12 -> -0.80. BBR/epi_reg thua ca hai (b0 tuong
+# phan GM/WM yeu). Nhu vay chi con MOT ma tran duy nhat cho ca ROI lan 5TT.
+# --------------------------------------------------------------------------
 
 run flirt \
   -in "$b0" \
@@ -133,6 +136,44 @@ run flirt \
   -cost normmi \
   -omat dwi2t1_fsl.mat \
   -out b0_in_t1.nii.gz
+
+run convert_xfm -omat t12dwi_fsl.mat -inverse dwi2t1_fsl.mat
+
+# Ma tran FSL gan chat voi cap luoi (in, ref) da sinh ra no. dwi2t1_fsl.mat do voi
+# in=$b0, ref=$t1; nen moi lan dung t12dwi_fsl.mat phai co in tren luoi $t1 va ref
+# tren luoi $b0. Duoi day t1_brain_from5tt / b0_brain thay cho $t1 / $b0, phai kiem
+# chung trung luoi — neu khong se sinh tinh tien nua-voxel im lang.
+run python3 - "$t1" t1_brain_from5tt.nii.gz "$b0" b0_brain.nii.gz <<'PY'
+import sys, numpy as np, nibabel as nib
+bad = False
+for a, b in ((sys.argv[1], sys.argv[2]), (sys.argv[3], sys.argv[4])):
+    ia, ib = nib.load(a), nib.load(b)
+    same = (ia.shape[:3] == ib.shape[:3]
+            and np.allclose(ia.header.get_zooms()[:3], ib.header.get_zooms()[:3], atol=1e-4)
+            and np.allclose(ia.affine, ib.affine, atol=1e-3))
+    print(f"  luoi {'KHOP' if same else 'LECH'}: {a.split('/')[-1]} vs {b.split('/')[-1]}")
+    bad |= not same
+if bad:
+    sys.exit("LOI: luoi khong khop — ma tran FSL se bi ap sai khung. Dung lai.")
+PY
+
+# Canh bao som neu dang ky that bai tho thien (xoay/tinh tien phi ly)
+run python3 - dwi2t1_fsl.mat <<'PY'
+import sys, numpy as np
+M = np.loadtxt(sys.argv[1])[:4, :4]
+ang = np.degrees(np.arccos(np.clip((np.trace(M[:3, :3]) - 1) / 2, -1, 1)))
+tr = np.linalg.norm(M[:3, 3])
+print(f"  dwi2t1: xoay {ang:.2f} do, tinh tien {tr:.1f} mm")
+if ang > 15:
+    sys.exit(f"LOI: xoay {ang:.2f} do qua lon cho anh cung buoi chup. Kiem tra lai.")
+PY
+
+run flirt \
+  -in t1_brain_from5tt.nii.gz \
+  -ref b0_brain.nii.gz \
+  -applyxfm \
+  -init t12dwi_fsl.mat \
+  -out t1_brain_in_dwi.nii.gz
 
 run transformconvert t12dwi_fsl.mat t1_brain_from5tt.nii.gz b0_brain.nii.gz flirt_import t12dwi_mrtrix.txt \
   -force

@@ -14,6 +14,7 @@ from pathlib import Path
 
 import nibabel as nib
 import numpy as np
+from nibabel.processing import resample_from_to
 
 
 NRRD_TO_NUMPY_DTYPE = {
@@ -93,6 +94,14 @@ def parse_args() -> argparse.Namespace:
             "NIfTI image that defines the target DWI grid for direct ROI projection. "
             "Defaults to derivatives/dwi/fa.nii.gz when patient_dir is supplied; "
             "otherwise a temporary NIfTI is generated from --template using mrconvert."
+        ),
+    )
+    parser.add_argument(
+        "--flirt-mat",
+        help=(
+            "Optional FSL FLIRT affine from the segmentation source space to DWI. "
+            "When supplied, masks are resampled with nearest-neighbour interpolation "
+            "instead of direct header-coordinate projection."
         ),
     )
     parser.add_argument(
@@ -268,24 +277,51 @@ def project_mask_to_reference(source_path: Path, reference_path: Path, out_path:
 
     source = nib.load(str(source_path))
     reference = nib.load(str(reference_path))
-    source_mask = np.asanyarray(source.dataobj) > 0
-    source_voxels = np.argwhere(source_mask)
-    out = np.zeros(reference.shape[:3], dtype=np.uint8)
-
-    if len(source_voxels) > 0:
-        source_world = nib.affines.apply_affine(source.affine, source_voxels)
-        target_ijk = nib.affines.apply_affine(np.linalg.inv(reference.affine), source_world)
-        inside = np.all((target_ijk >= 0) & (target_ijk < np.array(reference.shape[:3])), axis=1)
-        if inside.any():
-            nearest = np.rint(target_ijk[inside]).astype(int)
-            nearest = np.clip(nearest, [0, 0, 0], np.array(reference.shape[:3]) - 1)
-            out[nearest[:, 0], nearest[:, 1], nearest[:, 2]] = 1
+    source_mask = nib.Nifti1Image(
+        (np.asanyarray(source.dataobj) > 0).astype(np.uint8), source.affine
+    )
+    resampled = resample_from_to(
+        source_mask,
+        (reference.shape[:3], reference.affine),
+        order=0,
+        mode="constant",
+        cval=0,
+    )
+    out = (np.asanyarray(resampled.dataobj) > 0).astype(np.uint8)
 
     img = nib.Nifti1Image(out, reference.affine)
     img.header.set_xyzt_units("mm")
     img.set_qform(reference.affine, code=1)
     img.set_sform(reference.affine, code=1)
     nib.save(img, str(out_path))
+
+
+def resample_mask_with_flirt(
+    source_path: Path,
+    reference_path: Path,
+    transform_path: Path,
+    out_path: Path,
+    force: bool,
+) -> None:
+    if out_path.exists() and not force:
+        raise FileExistsError(f"Output exists, use --force: {out_path}")
+
+    require_tool("flirt")
+    cmd = [
+        "flirt",
+        "-in",
+        str(source_path),
+        "-ref",
+        str(reference_path),
+        "-applyxfm",
+        "-init",
+        str(transform_path),
+        "-interp",
+        "nearestneighbour",
+        "-out",
+        str(out_path),
+    ]
+    run_command(cmd)
 
 
 def write_report(report_path: Path, args: argparse.Namespace, results: list[SegmentResult]) -> None:
@@ -295,6 +331,7 @@ def write_report(report_path: Path, args: argparse.Namespace, results: list[Segm
         f"- Source segmentation: `{args.seg}`",
         f"- DWI template: `{args.template}`",
         f"- Output directory: `{args.out_dir}`",
+        f"- Source-to-DWI FLIRT matrix: `{args.flirt_mat or ''}`",
         f"- Dilation passes: `{args.dilate}`",
         "",
         "## Segment Results",
@@ -340,14 +377,19 @@ def main() -> int:
     seg_path = resolve_path(args.seg, patient_dir, default_seg)
     template_path = resolve_path(args.template, patient_dir, default_template)
     reference_nifti = resolve_path(args.reference_nifti, patient_dir, default_reference) if (args.reference_nifti or default_reference) else None
+    flirt_mat = resolve_path(args.flirt_mat, patient_dir) if args.flirt_mat else None
     out_dir = resolve_path(args.out_dir, patient_dir, default_out_dir)
     report_path = resolve_path(args.report, patient_dir, default_report)
 
     args.seg = str(seg_path)
     args.template = str(template_path)
     args.out_dir = str(out_dir)
+    args.flirt_mat = str(flirt_mat) if flirt_mat else None
 
-    for path in (seg_path, template_path):
+    required_paths = [seg_path, template_path]
+    if flirt_mat is not None:
+        required_paths.append(flirt_mat)
+    for path in required_paths:
         if not path.exists():
             print(f"Missing input: {path}", file=sys.stderr)
             return 1
@@ -373,7 +415,16 @@ def main() -> int:
         write_mask(source_mask, affine, source_path, args.force)
         source_voxels, source_center = mask_count_and_center(source_path)
 
-        project_mask_to_reference(source_path, reference_path, dwi_path, args.force)
+        if flirt_mat is not None:
+            resample_mask_with_flirt(
+                source_path,
+                reference_path,
+                flirt_mat,
+                dwi_path,
+                args.force,
+            )
+        else:
+            project_mask_to_reference(source_path, reference_path, dwi_path, args.force)
         dwi_voxels, dwi_center = mask_count_and_center(dwi_path)
 
         dilated_voxels = None

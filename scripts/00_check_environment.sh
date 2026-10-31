@@ -1,12 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export FSLDIR="${FSLDIR:-/home/devold/fsl}"
+if [[ -f "$FSLDIR/etc/fslconf/fsl.sh" ]]; then
+  # Match the environment used by the processing scripts when launched from a
+  # non-interactive WSL shell.
+  # shellcheck disable=SC1091
+  source "$FSLDIR/etc/fslconf/fsl.sh"
+fi
+export PATH="/home/devold/fsl/share/fsl/bin:/home/devold/ants_env/bin:$PATH"
+
 required_commands=(
   mrconvert
   mrinfo
+  mrcalc
+  mrmath
+  mrstats
   dwidenoise
   mrdegibbs
   dwifslpreproc
+  dwibiascorrect
+  dwi2mask
+  dwi2tensor
+  tensor2metric
   dwi2response
   dwi2fod
   tckgen
